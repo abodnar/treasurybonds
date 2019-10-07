@@ -1,0 +1,21 @@
+{
+  "name": "treasury_bonds",
+  "version": "1.0.0",
+  "description": "A tool to import a spreadsheet of treasury bonds into the IRS' Treasury Direct application.",
+  "main": "treasuryBondImporter.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "Adam Bodnar",
+  "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/abodnar/treasurybonds"
+  },
+  "dependencies": {
+    "csv": "^5.1.3",
+    "selenium-webdriver": "^4.0.0-alpha.5",
+    "yargs": "^14.2.0"
+  }
+}
