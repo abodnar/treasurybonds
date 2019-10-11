@@ -14,8 +14,12 @@
     "url": "https://github.com/abodnar/treasurybonds"
   },
   "dependencies": {
-    "csv": "^5.1.3",
+    "fast-csv": "^3.4.0",
+    "format-number": "^3.0.0",
     "selenium-webdriver": "^4.0.0-alpha.5",
     "yargs": "^14.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^12.7.11"
   }
 }
