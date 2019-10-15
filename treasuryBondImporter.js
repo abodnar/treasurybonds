@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 
 const fs = require('fs');
-const {Builder, By, Key, until, Capabilities} = require('selenium-webdriver');
-const chrome = require('selenium-webdriver/chrome');
 const yargs = require('yargs');
 const csv = require('fast-csv');
 const format = require('format-number');
+const puppeteer = require('puppeteer');
 
 let parsedRows = 0;
 let processedRows = 0;
@@ -80,6 +79,11 @@ const argv = yargs
         describe: 'Path to your Chrome profile directory',
         type: 'string'
     })
+    .option('e', {
+        alias: 'endpoint',
+        describe: 'Endpoint URL for accessing an already running Chrome',
+        type: 'string'
+    })
     .check(function (argv) {
         if (fileExists(argv.f)) {
             return true;
@@ -95,6 +99,7 @@ const username = argv.u;
 const password = argv.p;
 const bondFile = argv.f;
 const browserProfile = argv.o;
+const wsEndpointURL = argv.e;
 
 function enterPassword(driver, password) {
     for (let i = 0; i < password.length; i++) {
@@ -111,88 +116,118 @@ function enterPassword(driver, password) {
     });
 }
 
-function processBond(bond, driver) {
-    // Select the series type for the bond
-    driver.findElement(By.xpath('//*[@name="secList"]/option[normalize-space(text())="' + bond.series + '"]')).then(function (el) {
-        return el.click();
-    });
-
-    // Select the denomination for the bond
-    driver.findElement(By.xpath('//*[@name="denomList"]/option[normalize-space(text())="' + bond.denomination + '"]')).then(function (el) {
-        return el.click();
-    });
-
-    // Enter the serial number for the bond
-    driver.findElement(By.name('serialNumber')).then(function (el) {
-        return el.sendKeys(bond.serial_number);
-    });
-
-    // Enter the issue month for the bond
-    driver.findElement(By.name('issueDateMonth')).then(function (el) {
-        let month = String(bond.issue_date.getMonth() + 1).padStart(2, '0');
-
-        return el.sendKeys(month);
-    });
-
-    // Enter the issue year for the bond
-    driver.findElement(By.name('issueDateYear')).then(function (el) {
-        return el.sendKeys(bond.issue_date.getFullYear());
-    });
-
-    // Add bond to cart
-    driver.findElement(By.xpath('//input[@value="Add to Cart"]')).then(function (el) {
-        return el.click();
-    });
+async function getPages(browser) {
+    return browser.pages();
 }
 
-(async function importBonds() {
+async function findBondEntryPage(pages) {
+    let foundPage = null;
+    for (const page of pages) {
+        let title = await page.title();
+
+        if (title === 'Add a Bond') {
+            foundPage = page;
+        }
+    }
+
+    return foundPage;
+}
+
+async function selectOptionByText(selector, page, val) {
+    const element = await page.$(selector);
+    let properties = await element.getProperties();
+    for (const property of properties.values()) {
+        const element = property.asElement();
+        if (element) {
+            let hText = await element.getProperty("text");
+            let text = await hText.jsonValue();
+            if (text === val) {
+                let hValue = await element.getProperty("value");
+                let value = await hValue.jsonValue();
+                await page.select(selector, value);
+            }
+        }
+    }
+}
+
+async function processBond(bond, page) {
+    await selectOptionByText('select[name="secList"]', page, bond.series);
+    await selectOptionByText('select[name="denomList"]', page, bond.denomination);
+
+    await page.type('[name=serialNumber]', bond.serial_number, {delay: 100});
+
+    let month = String(bond.issue_date.getMonth() + 1).padStart(2, '0');
+    await page.type('[name=issueDateMonth]', month, {delay: 100});
+
+    let year = String(bond.issue_date.getFullYear());
+    await page.type('[name=issueDateYear]', year, {delay: 100});
+
+    await Promise.all([
+        page.waitForNavigation(), // The promise resolves after navigation has finished
+        page.click('[value="Add to Cart"]'), // Clicking the link will indirectly cause a navigation
+    ]);
+}
+
+(async () => {
+    let browser = null;
+
     let readBondFilePromise = readBondFile(bondFile);
     await readBondFilePromise.then(function (result) {
         bondData = result;
         parsedRows = result.length;
     });
 
-    let opts = new chrome.Options();
-    opts.addArguments('user-data-dir=' + browserProfile);
-
-    let driver = new Builder().withCapabilities(Capabilities.chrome()).setChromeOptions(opts).build();
+    // let opts = new chrome.Options();
+    // opts.addArguments('user-data-dir=' + browserProfile);
+    //
+    // let driver = new Builder().withCapabilities(Capabilities.chrome()).setChromeOptions(opts).build();
 
     try {
-        await driver.get('https://www.treasurydirect.gov/go_to_login.htm');
-        await driver.findElement(By.xpath('//img[@alt="Go to TreasuryDirect"]')).click();
-        await driver.wait(until.titleIs('Access Your TreasuryDirect Account'), 1000);
+        if (wsEndpointURL === null) {
+            console.log('Shouldn\'t be here currently');
+        } else {
+            browser = await puppeteer.connect({
+                browserWSEndpoint: wsEndpointURL
+            })
+        }
 
-        await driver.findElement(By.name('username')).sendKeys(username, Key.RETURN);
+        // await driver.get('https://www.treasurydirect.gov/go_to_login.htm');
+        // await driver.findElement(By.xpath('//img[@alt="Go to TreasuryDirect"]')).click();
+        // await driver.wait(until.titleIs('Access Your TreasuryDirect Account'), 1000);
+        //
+        // await driver.findElement(By.name('username')).sendKeys(username, Key.RETURN);
+        //
+        // await driver.wait(until.titleIs('Access Your TreasuryDirect Account'), 1000);
+        //
+        // enterPassword(driver, password);
+        //
+        // await driver.wait(until.titleContains('Welcome to Your Account Summary'), 1000);
+        // await driver.findElement(By.partialLinkText('ManageDirect')).click();
+        //
+        // // Switching to the conversion account
+        // await driver.wait(until.titleIs('ManageDirect'), 1000);
+        // await driver.findElement(By.partialLinkText('Access my Conversion Linked Account')).click();
+        //
+        // // Navigating to the page that lets you add a bond
+        // await driver.wait(until.titleIs('Account Summary for My Converted Bonds'), 1000);
+        // await driver.findElement(By.partialLinkText('ManageDirect')).click();
+        //
+        // await driver.wait(until.titleIs('ManageDirect'), 1000);
+        // await driver.findElement(By.partialLinkText('Convert my bonds')).click();
+        //
+        // await driver.wait(until.titleIs('Select A Registration'), 1000);
+        // await driver.findElement(By.xpath('//*[@value="Select Registration & Continue"]')).click();
+        const pages = await getPages(browser);
+        const page = await findBondEntryPage(pages);
 
-        await driver.wait(until.titleIs('Access Your TreasuryDirect Account'), 1000);
+        if (page) {
+            for (const row of bondData) {
+                await processBond(row, page);
 
-        enterPassword(driver, password);
-
-        await driver.wait(until.titleContains('Welcome to Your Account Summary'), 1000);
-        await driver.findElement(By.partialLinkText('ManageDirect')).click();
-
-        // Switching to the conversion account
-        await driver.wait(until.titleIs('ManageDirect'), 1000);
-        await driver.findElement(By.partialLinkText('Access my Conversion Linked Account')).click();
-
-        // Navigating to the page that lets you add a bond
-        await driver.wait(until.titleIs('Account Summary for My Converted Bonds'), 1000);
-        await driver.findElement(By.partialLinkText('ManageDirect')).click();
-
-        await driver.wait(until.titleIs('ManageDirect'), 1000);
-        await driver.findElement(By.partialLinkText('Convert my bonds')).click();
-
-        await driver.wait(until.titleIs('Select A Registration'), 1000);
-        await driver.findElement(By.xpath('//*[@value="Select Registration & Continue"]')).click();
-
-        await bondData.slice(0, 2).forEach(function (row) {
-            // Wait for the add bond page to load
-            driver.wait(until.titleIs('Add a Bond'), 1000);
-
-            processBond(row, driver);
-            processedRows++;
-        });
+                processedRows++;
+            }
+        }
     } finally {
-        // await driver.quit();
+        browser.disconnect();
     }
 })();
