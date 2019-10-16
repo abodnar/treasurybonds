@@ -19,6 +19,14 @@ function fileExists(filename) {
     }
 }
 
+const keypress = async () => {
+    process.stdin.setRawMode(true);
+    return new Promise(resolve => process.stdin.once('data', () => {
+        process.stdin.setRawMode(false);
+        resolve()
+    }))
+};
+
 function readBondFile(bondFile) {
     return new Promise(function (resolve, reject) {
         let data = [];
@@ -57,13 +65,11 @@ function readBondFile(bondFile) {
 const argv = yargs
     .option('u', {
         alias: 'username',
-        demandOption: true,
         describe: 'Your Treasury Direct username',
         type: 'string'
     })
     .option('p', {
         alias: 'password',
-        demandOption: true,
         describe: 'Your Treasury Direct password',
         type: 'string'
     })
@@ -73,18 +79,15 @@ const argv = yargs
         describe: 'Path to the CSV file of bonds to import',
         type: 'string'
     })
-    .option('o', {
-        alias: 'profile',
-        demandOption: true,
-        describe: 'Path to your Chrome profile directory',
-        type: 'string'
-    })
     .option('e', {
         alias: 'endpoint',
         describe: 'Endpoint URL for accessing an already running Chrome',
         type: 'string'
     })
     .check(function (argv) {
+        // if (argv.e)
+        //     throw(new Error('Argument check failed: You must specify a '))
+        // }
         if (fileExists(argv.f)) {
             return true;
         } else {
@@ -98,22 +101,20 @@ const argv = yargs
 const username = argv.u;
 const password = argv.p;
 const bondFile = argv.f;
-const browserProfile = argv.o;
 const wsEndpointURL = argv.e;
 
-function enterPassword(driver, password) {
+async function enterPassword(page, password) {
     for (let i = 0; i < password.length; i++) {
         let key = password[i].toUpperCase();
 
-        driver.findElement(By.xpath('//input[@value="' + key + '"]')).then(function (el) {
-            return el.click();
-        });
+        await page.click('[value="' + key + '"]');
     }
 
     // Submit the password
-    driver.findElement(By.name('enter.x')).then(function (el) {
-        return el.click();
-    });
+    await Promise.all([
+        page.waitForNavigation(),
+        page.click('[name="enter.x"]'),
+    ]);
 }
 
 async function getPages(browser) {
@@ -150,22 +151,30 @@ async function selectOptionByText(selector, page, val) {
     }
 }
 
+function bondHasRequiredFields(bond) {
+    return (bond.series && bond.denomination && bond.serial_number && bond.issue_date);
+}
+
 async function processBond(bond, page) {
-    await selectOptionByText('select[name="secList"]', page, bond.series);
-    await selectOptionByText('select[name="denomList"]', page, bond.denomination);
+    if (bondHasRequiredFields(bond)) {
+        await selectOptionByText('select[name="secList"]', page, bond.series);
+        await selectOptionByText('select[name="denomList"]', page, bond.denomination);
 
-    await page.type('[name=serialNumber]', bond.serial_number, {delay: 100});
+        await page.type('[name=serialNumber]', bond.serial_number, {delay: 100});
 
-    let month = String(bond.issue_date.getMonth() + 1).padStart(2, '0');
-    await page.type('[name=issueDateMonth]', month, {delay: 100});
+        let month = String(bond.issue_date.getMonth() + 1).padStart(2, '0');
+        await page.type('[name=issueDateMonth]', month, {delay: 100});
 
-    let year = String(bond.issue_date.getFullYear());
-    await page.type('[name=issueDateYear]', year, {delay: 100});
+        let year = String(bond.issue_date.getFullYear());
+        await page.type('[name=issueDateYear]', year, {delay: 100});
 
-    await Promise.all([
-        page.waitForNavigation(), // The promise resolves after navigation has finished
-        page.click('[value="Add to Cart"]'), // Clicking the link will indirectly cause a navigation
-    ]);
+        await Promise.all([
+            page.waitForNavigation(), // The promise resolves after navigation has finished
+            page.click('[value="Add to Cart"]'), // Clicking the button will indirectly cause a navigation
+        ]);
+
+        processedRows++;
+    }
 }
 
 (async () => {
@@ -177,57 +186,108 @@ async function processBond(bond, page) {
         parsedRows = result.length;
     });
 
-    // let opts = new chrome.Options();
-    // opts.addArguments('user-data-dir=' + browserProfile);
-    //
-    // let driver = new Builder().withCapabilities(Capabilities.chrome()).setChromeOptions(opts).build();
-
     try {
-        if (wsEndpointURL === null) {
-            console.log('Shouldn\'t be here currently');
+        if (wsEndpointURL === undefined) {
+            browser = await puppeteer.launch({
+                headless: false, // Puppeteer is 'headless' by default.
+                // devtools: true,
+            });
+
+            const page = await browser.newPage();
+            await page.goto('https://www.treasurydirect.gov/go_to_login.htm', {
+                timeout: 0,
+            });
+
+            await Promise.all([
+                page.waitForNavigation(), // The promise resolves after navigation has finished
+                page.click('[alt="Go to TreasuryDirect"]') // Clicking the button will indirectly cause a navigation
+            ]);
+
+            await page.type('[name=username]', username, {delay: 100});
+
+            await Promise.all([
+                page.waitForNavigation(),
+                page.keyboard.press('Enter')
+            ]);
+
+            const otpElement = await page.$('[name=otp]');
+
+            if (otpElement !== null) {
+                console.log('You must enter the OTP code that was sent through email.');
+                console.log('Once you\'ve submitted the OTP code and the password page is displayed, press any key to continue.');
+                await keypress();
+            }
+
+            await enterPassword(page, password);
+
+            // Navigate to the ManageDirect page
+            const manageDirectElem = await page.$x("//a[contains(., 'ManageDirect')]");
+
+            if (manageDirectElem.length) {
+                await Promise.all([
+                    page.waitForNavigation(),
+                    manageDirectElem[0].click()
+                ]);
+            }
+
+            // Navigate to the Conversion Linked Account
+            const conversionAccountElem = await page.$x("//a[contains(., 'Access my Conversion Linked Account')]");
+            await Promise.all([
+                page.waitForNavigation(),
+                conversionAccountElem[0].click()
+            ]);
+
+            // Navigating to the page that lets you add a bond
+            const convManageDirectElem = await page.$x("//a[contains(., 'ManageDirect')]");
+            await Promise.all([
+                page.waitForNavigation(),
+                convManageDirectElem[0].click()
+            ]);
+
+            // Navigate to Convert my bonds page
+            const convertBondsElem = await page.$x("//a[contains(., 'Convert my bonds')]");
+            await Promise.all([
+                page.waitForNavigation(),
+                convertBondsElem[0].click()
+            ]);
+
+            // Select default selected Registration
+            const selectRegistrationElem = await page.$('[value="Select Registration & Continue"]');
+            await Promise.all([
+                page.waitForNavigation(),
+                selectRegistrationElem.click()
+            ]);
         } else {
             browser = await puppeteer.connect({
-                browserWSEndpoint: wsEndpointURL
+                browserWSEndpoint: wsEndpointURL,
             })
         }
 
-        // await driver.get('https://www.treasurydirect.gov/go_to_login.htm');
-        // await driver.findElement(By.xpath('//img[@alt="Go to TreasuryDirect"]')).click();
-        // await driver.wait(until.titleIs('Access Your TreasuryDirect Account'), 1000);
-        //
-        // await driver.findElement(By.name('username')).sendKeys(username, Key.RETURN);
-        //
-        // await driver.wait(until.titleIs('Access Your TreasuryDirect Account'), 1000);
-        //
-        // enterPassword(driver, password);
-        //
-        // await driver.wait(until.titleContains('Welcome to Your Account Summary'), 1000);
-        // await driver.findElement(By.partialLinkText('ManageDirect')).click();
-        //
-        // // Switching to the conversion account
-        // await driver.wait(until.titleIs('ManageDirect'), 1000);
-        // await driver.findElement(By.partialLinkText('Access my Conversion Linked Account')).click();
-        //
-        // // Navigating to the page that lets you add a bond
-        // await driver.wait(until.titleIs('Account Summary for My Converted Bonds'), 1000);
-        // await driver.findElement(By.partialLinkText('ManageDirect')).click();
-        //
-        // await driver.wait(until.titleIs('ManageDirect'), 1000);
-        // await driver.findElement(By.partialLinkText('Convert my bonds')).click();
-        //
-        // await driver.wait(until.titleIs('Select A Registration'), 1000);
-        // await driver.findElement(By.xpath('//*[@value="Select Registration & Continue"]')).click();
         const pages = await getPages(browser);
         const page = await findBondEntryPage(pages);
 
         if (page) {
-            for (const row of bondData) {
-                await processBond(row, page);
+            let i, chunk;
+            for (i = 0; bondData.length; i += 50) {
+                chunk = bondData.slice(i, i + 50);
 
-                processedRows++;
+                for (const row of chunk) {
+                    await processBond(row, page);
+                }
+
+                if (bondData.length > (i + 50)) {
+                    console.log('Imported 50 bonds into cart. You must create a manifest before proceeding further.');
+                    console.log('Hit any key once you have created the manifest and navigated back to the Add to Bond page');
+                    await keypress();
+                }
             }
         }
     } finally {
-        browser.disconnect();
+        if (browser) {
+            browser.disconnect();
+        }
+
+        console.log('Parsed: ' + parsedRows + ' rows from file.');
+        console.log('Processed: ' + processedRows + ' bonds.')
     }
 })();
