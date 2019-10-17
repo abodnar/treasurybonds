@@ -63,6 +63,12 @@ function readBondFile(bondFile) {
 }
 
 const argv = yargs
+    .option('f', {
+        alias: 'file',
+        demandOption: true,
+        describe: 'Path to the CSV file of bonds to import',
+        type: 'string'
+    })
     .option('u', {
         alias: 'username',
         describe: 'Your Treasury Direct username',
@@ -73,21 +79,24 @@ const argv = yargs
         describe: 'Your Treasury Direct password',
         type: 'string'
     })
-    .option('f', {
-        alias: 'file',
-        demandOption: true,
-        describe: 'Path to the CSV file of bonds to import',
-        type: 'string'
-    })
     .option('e', {
         alias: 'endpoint',
         describe: 'Endpoint URL for accessing an already running Chrome',
         type: 'string'
     })
+    .usage("Usage: $0 -f <bond file> [options]")
     .check(function (argv) {
-        // if (argv.e)
-        //     throw(new Error('Argument check failed: You must specify a '))
-        // }
+        // If no endpoint provided, then we must have a username and password
+        if (!argv.e && (!argv.u || !argv.p)) {
+            throw(new Error('Argument check failed: You must specify a username and a password.'));
+        }
+
+        // If we have an endpoint, then make sure it starts with the required ws://
+        if (argv.e && !/^(ws):\/\/[^ "]+$/.test(argv.e)) {
+            throw(new Error('Argument check failed: The endpoint URL must be valid.'));
+        }
+
+        // Validate the file exists
         if (fileExists(argv.f)) {
             return true;
         } else {
@@ -95,7 +104,9 @@ const argv = yargs
         }
     })
     .help()
+    .showHelpOnFail(true)
     .alias('help', 'h')
+    .epilogue('For more information, https://github.com/abodnar/treasurybonds')
     .argv;
 
 const username = argv.u;
@@ -132,6 +143,20 @@ async function findBondEntryPage(pages) {
     }
 
     return foundPage;
+}
+
+async function navigateToLink(linkText, page) {
+    const navElement = await page.$x("//a[contains(., '" + linkText + "')]");
+
+    // page.$x always returns an array. We should have one result unless layout changes
+    if (navElement.length) {
+        await Promise.all([
+            page.waitForNavigation(),
+            navElement[0].click()
+        ]);
+    } else {
+        throw(new Error('Unable to find link with text: ' + linkText + '. Contact the developer.'));
+    }
 }
 
 async function selectOptionByText(selector, page, val) {
@@ -221,35 +246,16 @@ async function processBond(bond, page) {
             await enterPassword(page, password);
 
             // Navigate to the ManageDirect page
-            const manageDirectElem = await page.$x("//a[contains(., 'ManageDirect')]");
-
-            if (manageDirectElem.length) {
-                await Promise.all([
-                    page.waitForNavigation(),
-                    manageDirectElem[0].click()
-                ]);
-            }
+            await navigateToLink('ManageDirect', page);
 
             // Navigate to the Conversion Linked Account
-            const conversionAccountElem = await page.$x("//a[contains(., 'Access my Conversion Linked Account')]");
-            await Promise.all([
-                page.waitForNavigation(),
-                conversionAccountElem[0].click()
-            ]);
+            await navigateToLink('Access my Conversion Linked Account', page);
 
             // Navigating to the page that lets you add a bond
-            const convManageDirectElem = await page.$x("//a[contains(., 'ManageDirect')]");
-            await Promise.all([
-                page.waitForNavigation(),
-                convManageDirectElem[0].click()
-            ]);
+            await navigateToLink('ManageDirect', page);
 
             // Navigate to Convert my bonds page
-            const convertBondsElem = await page.$x("//a[contains(., 'Convert my bonds')]");
-            await Promise.all([
-                page.waitForNavigation(),
-                convertBondsElem[0].click()
-            ]);
+            await navigateToLink('Convert my bonds', page);
 
             // Select default selected Registration
             const selectRegistrationElem = await page.$('[value="Select Registration & Continue"]');
