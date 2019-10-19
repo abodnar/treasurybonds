@@ -58,3 +58,7 @@ Options:
 
 3. Copy websocketDebuggerUrl value(WS Endpoint URL) and then execute the Treasury Import script using the -e flag
 
+## Example CSV format
+| Series | Denomination | Serial Number | Issue Date | Price | Interest | Value | Rate | Yield | Next Interest Date | Final Maturity Date | Note | Cash/Exchange Date |
+|--------|--------------|---------------|------------|-------|----------|-------|------|-------|--------------------|---------------------|------|--------------------|
+|   EE   |     100      |  C123456789EE | Jan-01     | 50    | 84.12    | 134.12| 4.00%| 5.26% | Apr-21             | Oct-31              |      |                    |
