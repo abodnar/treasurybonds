@@ -14,7 +14,7 @@
     "url": "https://github.com/abodnar/treasurybonds"
   },
   "dependencies": {
-    "fast-csv": "^3.4.0",
+    "fast-csv": "^4.3.6",
     "format-number": "^3.0.0",
     "puppeteer": "^1.20.0",
     "yargs": "^14.2.0"
